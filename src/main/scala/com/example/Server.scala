@@ -22,8 +22,8 @@ object Server {
 
 class Hello extends Service[HttpRequest, HttpResponse] {
   def apply(request: HttpRequest): Future[HttpResponse] = {
-    if (request.getUri.endsWith("/db")) {
-      showDatabase(request);
+    if (request.getUri.endsWith("/log")) {
+      log(request);
     } else {
       showHome(request);
     }
@@ -32,26 +32,36 @@ class Hello extends Service[HttpRequest, HttpResponse] {
   def showHome(request: HttpRequest): Future[HttpResponse] = {
     val response = Response()
     response.setStatusCode(200)
-    response.setContentString("Hello from second app!")
+    response.setContentString(request.getHeaders())
     Future(response)
   }
 
   def showDatabase(request: HttpRequest): Future[HttpResponse] = {
     val connection = getConnection
     val stmt = connection.createStatement
-    stmt.executeUpdate("CREATE TABLE IF NOT EXISTS ticks (tick timestamp)")
-    stmt.executeUpdate("INSERT INTO ticks VALUES (now())")
+    stmt.executeUpdate("DROP TABLE ticks")
+    stmt.executeUpdate("CREATE TABLE IF NOT EXISTS accesslog (time timestamp, method string, client string, path text)")
+    val query = connection.prepareStatement("INSERT INTO accesslog VALUES (now(), ?, ?)")
+    query.setString(1, request.getHeader("X-Forwarded-For"))
+    query.setString(2, request.getUri())
 
-    val rs = stmt.executeQuery("SELECT tick FROM ticks")
+    val rs = stmt.executeQuery("SELECT time, method, client, path FROM accesslog LIMIT 100")
 
-    var out = ""
+    var sb = new StringBuilder()
     while (rs.next) {
-      out += "Read from DB: " + rs.getTimestamp("tick") + "\n"
+      sb.append(rs.getTimestamp("time"))
+      sb.append(" ")
+      sb.append(rs.getString("client"))
+      sb.append(" ")
+      sb.append(rs.getString("method"))
+      sb.append(" ")
+      sb.append(rs.getString("path"))
+      sb.append("\n")
     }
 
     val response = Response()
     response.setStatusCode(200)
-    response.setContentString(out)
+    response.setContentString(sb.toString())
     Future(response)
   }
 
