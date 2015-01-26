@@ -1,1 +1,1 @@
-web: target/universal/stage/bin/scala-getting-started
+web: target/universal/stage/bin/accesslog
