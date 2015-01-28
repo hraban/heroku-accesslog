@@ -22,7 +22,8 @@ object Server {
     val port = Properties.envOrElse("PORT", "8080").toInt
     println("Starting on port: "+port)
 
-    val service = logFilter andThen (new HelloFactory)
+    val errfilter = new filter.ExceptionFilter[Request]
+    val service = logFilter andThen errfilter andThen (new HelloFactory)
     val server = finagle.Httpx.serve(":" + port, service)
     Await.ready(server)
   }
@@ -72,25 +73,28 @@ class Hello(client: finagle.ClientConnection) extends finagle.Service[Request, R
     println(System.getenv("DATABASE_URL"));
     val response = Response()
     response.setStatusCode(200)
-    response.setContentString(System.getenv("DATABASE_URL"))
+    response.setContentString("DB: " + System.getenv("DATABASE_URL"))
     return Future(response)
   }
 
   def showDatabase(request: Request): Future[Response] = {
     val connection = getConnection
     val stmt = connection.createStatement
-    stmt.executeUpdate("DROP TABLE ticks")
-    stmt.executeUpdate("CREATE TABLE IF NOT EXISTS accesslog (time timestamp, method string, client string, path text)")
-    val query = connection.prepareStatement("INSERT INTO accesslog VALUES (now(), ?, ?)")
+    stmt.executeUpdate("DROP TABLE IF EXISTS ticks")
+    stmt.executeUpdate("CREATE TABLE IF NOT EXISTS accesslog (time timestamp, method text, client text, path text)")
+    val query = connection.prepareStatement("INSERT INTO accesslog VALUES (now(), ?, ?, ?)")
     query.setString(1, request.xForwardedFor map (_.toString) getOrElse "")
     query.setString(2, clientip)
     query.setString(3, request.path)
+    query.executeUpdate()
 
-    val rs = stmt.executeQuery("SELECT time, method, client, path FROM accesslog LIMIT 100")
+    val rs = stmt.executeQuery("SELECT time, method, client, path FROM accesslog ORDER BY time DESC LIMIT 100")
 
     // Is string builder hoisted outside of a while loop by optimizer?
     val sb = new StringBuilder()
+    sb.append("Access log:\n\n")
     while (rs.next) {
+      println("Got result")
       List(
         rs.getTimestamp("time"),
         " ",
@@ -111,9 +115,12 @@ class Hello(client: finagle.ClientConnection) extends finagle.Service[Request, R
 
   def getConnection(): Connection = {
     val dbUri = new net.URI(System.getenv("DATABASE_URL"))
-    val username = dbUri.getUserInfo.split(":")(0)
-    val password = dbUri.getUserInfo.split(":")(1)
-    val dbUrl = "jdbc:postgresql://" + dbUri.getHost + dbUri.getPath
+    val userinfo = Option(dbUri.getUserInfo)
+    val username = userinfo map (_.split(":")) filter (_.length > 0) map (_(0)) getOrElse null
+    val password = userinfo map (_.split(":")) filter (_.length > 1) map (_(1)) getOrElse null
+    val host = Option(dbUri.getHost) getOrElse "localhost"
+    val dbUrl = "jdbc:postgresql://" + host + dbUri.getPath
+    println("Connecting to: " + dbUrl)
     DriverManager.getConnection(dbUrl, username, password)
   }
 }
